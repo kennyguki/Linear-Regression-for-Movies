@@ -1,0 +1,357 @@
+---
+title: "Final Project"
+author: "Kenneth Gutierrez King"
+date: "2025-12-10"
+output: pdf_document
+---
+
+# Basic Data cleaning
+
+```{r}
+library(readxl)
+movies <- read_excel("C:/Users/kenne/Downloads/dataset70-1 (1).xlsx")
+
+# Removing extreme outlier ($4 million dollar budget but $75,000 gross seems like a typo)
+movies <- movies[movies$movie_title != "An Everlasting Piece", ]
+
+# Fixing issue with dates, as only last two digits of years are shown
+movies$production_date <- as.Date(movies$production_date, format = "%m/%d/%y")
+
+movies$production_date <- as.Date(
+  ifelse(
+    movies$production_date > "2025-01-01",
+    movies$production_date - 36525,   # subtract 100 years if date greater than 2025
+    movies$production_date
+  )
+)
+```
+
+## Adjusting for inflation
+
+```{r}
+inflation <- read_excel("C:/Users/kenne/Downloads/Inflation.xlsx") # From U.S. Bureau of Labor Statistics
+
+movies$release_year <- as.numeric(format(movies$production_date, "%Y"))
+inflation$Year <- as.numeric(inflation$Year)
+
+cpi_lookup <- setNames(inflation$Annual, as.character(inflation$Year))
+
+movies$CPI <- cpi_lookup[as.character(movies$release_year)]
+cpi_base <- cpi_lookup["2019"] # Latest film in dataset (found in lower EDA)
+
+movies$budget_adj <- movies$budget * (cpi_base / movies$CPI)
+movies$gross_adj  <- movies$gross  * (cpi_base / movies$CPI)
+```
+
+# Categorical Univariate EDA
+
+## Genres univariate EDA
+
+```{r}
+# Number of total genres, and how often they appear
+all_genres <- unlist(strsplit(as.character(movies$genres), ","))  # make sure it's character
+genre_counts <- table(all_genres)
+genre_counts <- sort(genre_counts, decreasing = TRUE)
+genre_counts
+cat("\n# of genres in dataset:")
+length(unique(all_genres))
+
+
+
+# Using excel, I manually allocated each movie into 1 of 6 different genre groups (since main genre was not in dataset and didn't want any overlap between genres)
+
+# Group 1: Action/Adventure/Sci-Fi
+# Group 2: Fantasy/Horror/Thriller/Mystery
+# Group 3: Comedy
+# Group 4: Drama/Romance
+# Group 5: Crime/Biography/History/War/Western
+# Group 6: Family/Animation/Music/Musical/Sport
+
+movies$genre_group <- as.factor(movies$genre_group)
+movies_per_group <- table(movies$genre_group)
+cat("\n# of movies produced per group:\n")
+print(movies_per_group)
+```
+## Directors univariate EDA
+
+```{r}
+# Count unique directors
+unique_directors <- unique(movies$director_name)
+num_directors <- length(unique_directors)
+cat("\n# of directors:\n")
+num_directors
+
+# Count movies per director
+director_counts <- table(movies$director_name)
+cat("\nDirectors and # of movies produced:\n")
+print(sort(director_counts, decreasing = TRUE))
+
+# We know that we can't have 30 dummy variables due to overparameterization, so we will only consider directors with at least 5 films made.
+director_counts <- table(movies$director_name)
+top_directors <- names(director_counts[director_counts >= 5])  # for example, 5+ movies
+
+movies$director_top <- ifelse(movies$director_name %in% top_directors, 1, 0)
+
+for (dir in top_directors) {
+  col_name <- paste0("director_", gsub(" ", "_", dir))
+  movies[[col_name]] <- ifelse(movies$director_name == dir, 1, 0)
+}
+```
+# Continuous Univariate EDA
+```{r}
+cat("Summary of Budget:\n")
+summary(movies$budget_adj)
+cat("Variance:", var(movies$budget_adj), "\n")
+cat("Standard Deviation:", sd(movies$budget_adj), "\n\n")
+
+cat("Summary of Gross:\n")
+summary(movies$gross_adj)
+cat("Variance:", var(movies$gross_adj), "\n")
+cat("Standard Deviation:", sd(movies$gross_adj), "\n\n")
+
+cat("Summary of Runtime (minutes):\n")
+summary(movies$runtime_minutes)
+cat("Variance:", var(movies$runtime_minutes), "\n")
+cat("Standard Deviation:", sd(movies$runtime_minutes), "\n\n")
+
+cat("Summary of Movie Ratings:\n")
+summary(movies$movie_averageRating)
+cat("Variance:", var(movies$movie_averageRating), "\n")
+cat("Standard Deviation:", sd(movies$movie_averageRating), "\n\n")
+
+cat("Summary of Release Year:\n")
+summary(movies$release_year)
+cat("Variance:", var(movies$release_year), "\n")
+cat("Standard Deviation:", sd(movies$release_year), "\n\n")
+
+cat("Summary of Director Birth Year:\n")
+summary(movies$birth_year)
+cat("Variance:", var(movies$birth_year), "\n")
+cat("Standard Deviation:", sd(movies$birth_year), "\n\n")
+
+
+hist(movies$budget_adj,
+     main = "Adjusted Budget",
+     xlab = "Dollars (Inflation Adjusted)")
+
+hist(movies$gross_adj,
+     main = "Adjusted Gross Revenue",
+     xlab = "Dollars (Inflation Adjusted)")
+
+
+hist(movies$runtime_minutes,
+     main = "Runtime",
+     xlab = "Minutes")
+
+hist(movies$movie_averageRating,
+     main = "Average Movie Rating",
+     xlab = "Rating (1–10)")
+
+hist(movies$release_year,
+     main = "Release Year",
+     xlab = "Year")
+
+# birth year seems like noise, so I created directors age at the release of film
+movies$director_age <- movies$release_year - movies$birth_year
+cat("\nSummary of Director Age:\n")
+summary(movies$director_age)
+hist(movies$director_age,
+     main = "Director Age",
+     xlab = "Age (Years)")
+
+# create log transformations for budget and gross due to non-normal histograms
+movies$log_budget_adj <- log(movies$budget_adj)
+movies$log_gross_adj <- log(movies$gross_adj)
+
+hist(movies$log_budget_adj,
+     main = "Log Adjusted Budget",
+     xlab = "log(Budget)")
+
+hist(movies$log_gross_adj,
+     main = "Log Adjusted Gross Revenue",
+     xlab = "log(Gross)")
+```
+# Bivariate EDA
+
+## Bivariate EDA with continuous predictors
+
+```{r}
+# budget vs gross (log scale)
+plot(movies$log_budget_adj, movies$log_gross_adj,
+     main="Log Budget vs. Log Gross Revenue",
+     xlab="Log Budget ($)", ylab="Log Gross ($)",
+     pch=19, col="blue")
+abline(lm(log_gross_adj ~ log_budget_adj, data=movies), col="red", lwd=2)
+
+
+# movies rating vs log(gross)
+plot(movies$movie_averageRating, movies$log_gross_adj,
+     main="Movies Average Rating vs. Log Gross Revenue",
+     xlab="Movies average rating", ylab="Log Gross ($)",
+     pch=19, col="blue")
+abline(lm(log_gross_adj ~ movie_averageRating, data=movies), col="red", lwd=2)
+
+# director age vs log(gross)
+plot(movies$director_age, movies$log_gross_adj,
+     main="Director age vs. Log Gross Revenue",
+     xlab="Director age", ylab="Log Gross ($)",
+     pch=19, col="blue")
+abline(lm(log_gross_adj ~ director_age, data=movies), col="red", lwd=2)
+
+# runtime vs log(gross)
+plot(movies$runtime_minutes, movies$log_gross_adj,
+     main="Runtime vs. Log Gross Revenue",
+     xlab="minutes", ylab="Log Gross ($)",
+     pch=19, col="blue")
+abline(lm(log_gross_adj ~ runtime_minutes, data=movies), col="red", lwd=2)
+
+# release year vs log(gross)
+plot(movies$release_year, movies$log_gross_adj,
+     main="Release Year vs. Log Gross Revenue",
+     xlab="year", ylab="Log Gross ($)",
+     pch=19, col="blue")
+abline(lm(log_gross_adj ~ release_year, data=movies), col="red", lwd=2)
+
+# Scatterplot matrix
+pairs(~ log_gross_adj + log_budget_adj + movie_averageRating + release_year + runtime_minutes + director_age,
+      data = movies,
+      main = "Scatterplot Matrix of Key Variables",
+      col = "blue",
+      )
+
+
+# Correlations for each contunious predictor vs log_gross
+cor(movies$log_budget_adj, movies$log_gross_adj)
+cor(movies$movie_averageRating, movies$log_gross_adj)
+cor(movies$director_age, movies$log_gross_adj)
+cor(movies$runtime_minutes, movies$log_gross_adj)
+cor(movies$release_year, movies$log_gross_adj)
+cor(movies[, c("log_budget_adj", "movie_averageRating", "runtime_minutes", "director_age", "release_year")])
+```
+# Bivariate EDA with categorical predictors
+```{r}
+
+# Director Experience vs. Revenue
+boxplot(log_gross_adj ~ director_top, data = movies,
+        main = "Director Experience vs. Log Gross Revenue",
+        xlab = "Experience Level",
+        ylab = "Log Gross ($)",
+        col = c("lightgreen", "lightblue"),
+        names = c("Not Top", "Top"),
+        pch = 19)
+
+
+# ANOVA test to see if groups are actually different
+director_anova <- aov(log_gross_adj ~ director_top, data = movies)
+summary(director_anova) # Director groups are statistically insignifcant, will not attempt to fit in model
+
+
+# Top Directors only
+boxplot(
+  movies$log_gross_adj[movies$director_Antoine_Fuqua == 1],
+  movies$log_gross_adj[movies$director_Barry_Levinson == 1],
+  movies$log_gross_adj[movies$director_Franklin_J._Schaffner == 1],
+  movies$log_gross_adj[movies$director_Jay_Roach == 1],
+  movies$log_gross_adj[movies$director_Jon_Amiel == 1],
+  movies$log_gross_adj[movies$director_Norman_Jewison == 1],
+  movies$log_gross_adj[movies$director_Peter_Segal == 1],
+  col = rainbow(7),
+  main = "Log Gross by Top Directors",
+  ylab = "Log Gross ($)",
+  names = c("A.F","B.L","F.J.S","J.R","J.A","N.J","P.S"),
+  pch = 19
+)
+
+# ANOVA test of the group of "top directors"
+top_directors_data <- movies[movies$director_top == 1, ]
+top_directors_anova <- aov(log_gross_adj ~ director_name, data = top_directors_data)
+summary(top_directors_anova) # Top directors are statistically insignifcant, will not attempt to fit in model
+
+
+# Genre Group vs Log Gross
+boxplot(
+  log_gross_adj ~ genre_group,
+  data = movies,
+  col = c("lightblue","lightgreen","lightpink","lightyellow","lavender","orange"),
+  main = "Log Gross by Genre Group",
+  xlab = "Genre Group",
+  ylab = "Log Gross ($)",
+  pch = 19)
+
+# Average log_gross for each genre group
+anova_model <- aov(log_gross_adj ~ genre_group, data = movies)
+summary(anova_model) # Genre groups have a statistically significant effect overall
+```
+# Model selection
+
+```{r}
+library(leaps)
+# Testing main-effects for log_budget, movie_averageRating, genre_group, runtime_minutes, and release_year. Other predictors eliminated during EDA
+
+regfit_full = regsubsets(log_gross_adj ~ log_budget_adj + movie_averageRating + as.factor(genre_group) + runtime_minutes + release_year, nvmax = 8, data = movies)
+
+# View summary
+reg.summary = summary(regfit_full)
+reg.summary
+reg.summary$bic
+```
+
+```{r}
+model_1 <- lm(log_gross_adj ~  log_budget_adj + movie_averageRating, data=movies)
+summary(model_1)
+
+model_2 <- lm(log_gross_adj ~ log_budget_adj + movie_averageRating + I(genre_group == 6), data=movies)
+summary(model_2)
+
+# Compare AIC
+aic1 <- extractAIC(model_1)
+aic2 <- extractAIC(model_2)
+cat("AIC Model 1:", aic1, "\n")
+cat("AIC Model 2:", aic2, "\n")
+
+
+# NO OTHER PREDICTORS OR INTERACTIONS WERE STATISTICALLY SIGNIFICANT (alpha = 0.05)!!!
+
+final_model <- model_2
+```
+
+# Model Diagnostics
+
+```{r}
+plot(final_model$fitted.values, final_model$residuals,
+     main="Residuals vs Fitted Values",
+     xlab="Fitted values",
+     ylab="Residuals",
+     pch=19, col="blue")
+abline(h=0, col="red", lwd=2)
+
+
+qqnorm(final_model$residuals, main="Normal Q-Q Plot")
+```
+```{r}
+# Adjusting for inflation
+budget_2013 <- 10000000
+cpi_2013 <- cpi_lookup["2013"]
+
+budget_adj <- budget_2013 * (cpi_base / cpi_2013)
+log_budget_adj <- log(budget_adj)
+
+
+
+new_data <- data.frame(
+  log_budget_adj = log_budget_adj,
+  movie_averageRating = 7.0,
+  genre_group = 3,
+  # Not needed but wanted to add for sake of problem
+  production_date = '2013-06-05',
+  runtime_minutes = 120,
+  genres = 'Comedy',
+  director_name = 'Antoine Fuqua'
+)
+
+prediction_log <- predict(final_model,newdata = new_data, interval = "prediction", level = 0.95)
+
+# Convert from log scale to dollars
+prediction <- exp(prediction_log)
+prediction
+```
